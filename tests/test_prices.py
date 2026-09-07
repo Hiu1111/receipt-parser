@@ -23,6 +23,8 @@ def tok(text: str, x0: float, y0: float, w: float = 40, h: float = 12) -> Token:
     ("1.299,50", "1299.50"),
     ("12. 99", "12.99"),
     ("12 .99", "12.99"),
+    ("€8.50", "8.50"),
+    ("£7.25", "7.25"),
 ])
 def test_parses_valid_prices(text, expected):
     result = parse_price(text)
