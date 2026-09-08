@@ -20,8 +20,9 @@ from receipt_parser.reconcile import build_receipt, extract_totals
 def main(path: str) -> None:
     image_bytes = Path(path).read_bytes()
 
-    straightened, angle = deskew(image_bytes)
-    print(f"deskew: {angle:+.2f} degrees\n")
+    result = deskew(image_bytes)
+    straightened, angle = result.image_bytes, result.angle
+    print(f"deskew: {angle:+.2f} degrees  sharpness={result.sharpness:.2f}  warped={result.looks_warped}\n")
 
     tokens = TesseractProvider().extract(straightened)
     print(f"tokens: {len(tokens)}")
