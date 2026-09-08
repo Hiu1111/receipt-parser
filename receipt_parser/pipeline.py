@@ -82,9 +82,13 @@ def parse_image(
     than once to measure and again to read.
     """
     angle = 0.0
+    warped = False
     if auto_deskew:
         try:
-            image_bytes, angle = deskew(image_bytes)
+            result = deskew(image_bytes)
+            image_bytes, angle, warped = (
+                result.image_bytes, result.angle, result.looks_warped
+            )
         except Exception:
             # A malformed or unsupported image should fail in the OCR
             # provider with a useful error, not here in preprocessing.
@@ -95,6 +99,16 @@ def parse_image(
     if angle:
         receipt.warnings.append(
             f"Image was rotated {angle:.1f} degrees before reading."
+        )
+
+    if warped:
+        # Actionable, and worth saying even on a successful parse. Rotation
+        # is correctable; curvature is not, and the fix is in the user's
+        # hands rather than the parser's.
+        receipt.warnings.append(
+            "The receipt looks curled or photographed at an angle. Text "
+            "lines that curve cannot be straightened by rotating, so some "
+            "rows may be misread. Lay it flat and photograph it straight on."
         )
 
     return receipt

@@ -28,6 +28,7 @@ happens once, on an already-straightened image.
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
@@ -66,25 +67,62 @@ def find_skew_angle(
     return fine
 
 
-def deskew(image_bytes: bytes) -> tuple[bytes, float]:
-    """Straighten an image. Returns the corrected bytes and the angle applied.
+# Below this, no rotation makes the text lines noticeably sharper than any
+# other -- which means the page is not merely tilted. A curled receipt or
+# one shot at an angle has baselines that curve, and no single rotation
+# straightens a curve.
+#
+# Calibrated on four receipts: a curled steakhouse receipt photographed at
+# an angle scored 1.33, while three readable ones scored 1.78, 2.02 and
+# 2.18. That is a thin basis for a threshold and it should be revisited
+# against a larger sample; it is set conservatively so that it fires on
+# clear warping rather than on every slightly imperfect photo.
+SHARPNESS_THRESHOLD = 1.5
 
-    An angle of 0 is returned unchanged rather than passed through a
-    rotation, since resampling costs a little sharpness and there is
-    nothing to gain when the page is already square.
+
+@dataclass
+class DeskewResult:
+    image_bytes: bytes
+    angle: float
+    # Ratio of the best projection variance to the median across all
+    # candidate angles. High means one rotation clearly wins; low means
+    # the page has no consistent horizontal structure to find.
+    sharpness: float
+
+    @property
+    def looks_warped(self) -> bool:
+        return self.sharpness < SHARPNESS_THRESHOLD
+
+
+def deskew(image_bytes: bytes) -> DeskewResult:
+    """Straighten an image and report how confident that straightening is.
+
+    An angle of 0 leaves the bytes untouched rather than passing them
+    through a rotation, since resampling costs a little sharpness and
+    there is nothing to gain when the page is already square.
     """
+    import numpy as np
+
     image = Image.open(io.BytesIO(image_bytes))
-    angle = find_skew_angle(image)
+    prepared = _prepare(image)
+
+    coarse_angles = _frange(-MAX_SKEW_DEGREES, MAX_SKEW_DEGREES, 1.0)
+    variances = [_profile_variance(prepared, a) for a in coarse_angles]
+    median = float(np.median(variances))
+    sharpness = (max(variances) / median) if median > 0 else 0.0
+
+    best_coarse = coarse_angles[variances.index(max(variances))]
+    angle = _best_angle(prepared, _frange(best_coarse - 1.0, best_coarse + 1.0, 0.1))
 
     if abs(angle) < fine_threshold():
-        return image_bytes, 0.0
+        return DeskewResult(image_bytes, 0.0, sharpness)
 
     rotated = image.rotate(
         angle, expand=True, fillcolor=255, resample=Image.BICUBIC
     )
     buffer = io.BytesIO()
     rotated.save(buffer, format="PNG")
-    return buffer.getvalue(), angle
+    return DeskewResult(buffer.getvalue(), angle, sharpness)
 
 
 def fine_threshold() -> float:
