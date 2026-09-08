@@ -28,8 +28,18 @@ class OCRProvider(Protocol):
         ...
 
 
-# Words below this confidence are usually OCR hallucinating structure out
-# of noise -- speckles on thermal paper, the edge of the receipt, a
-# fingertip in frame. Keeping them adds junk rows that the layout stage
-# then has to reason about.
-DEFAULT_MIN_CONFIDENCE = 0.30
+# Deliberately permissive. The obvious setting is something like 0.30, to
+# drop OCR hallucinating structure out of speckles and paper edges -- but
+# split price fragments score *lower* than noise does. On a real Wendy's
+# receipt the two halves of "$3,49" came back at 0.12 while every word
+# around them scored above 0.95, and a 0.30 filter silently deleted a line
+# item.
+#
+# So the floor is zero: keep everything Tesseract believes is text at all.
+# (It reports -1 for non-text regions, which the provider rejects
+# separately, so this is not the same as keeping literally everything.)
+# Junk is rejected downstream instead, where there is more to judge on --
+# whether the token parses as money, whether it sits in the price column,
+# and whether the row's arithmetic reconciles. Position and structure are
+# better evidence than the engine's own confidence score.
+DEFAULT_MIN_CONFIDENCE = 0.0

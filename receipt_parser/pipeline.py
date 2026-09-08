@@ -8,7 +8,7 @@ the case where an early stage produces nothing usable.
 from __future__ import annotations
 
 from receipt_parser.items import extract_items
-from receipt_parser.layout import cluster_rows, estimate_skew
+from receipt_parser.layout import cluster_rows, estimate_skew, merge_price_fragments
 from receipt_parser.models import ParsedReceipt, ParseStatus, Token
 from receipt_parser.ocr.base import OCRProvider
 from receipt_parser.ocr.deskew import deskew
@@ -33,6 +33,9 @@ def parse_tokens(tokens: list[Token]) -> ParsedReceipt:
         )
 
     rows = cluster_rows(tokens)
+    # Before anything reads a price: OCR splits amounts at their separator
+    # often enough that skipping this loses whole line items.
+    rows = merge_price_fragments(rows)
     price_column = find_price_column(rows)
 
     if price_column is None:

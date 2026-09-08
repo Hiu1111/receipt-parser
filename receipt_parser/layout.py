@@ -131,3 +131,72 @@ def estimate_skew(tokens: list[Token]) -> float:
 
     slopes.sort()
     return slopes[len(slopes) // 2]
+
+
+def merge_price_fragments(rows: list[Row]) -> list[Row]:
+    """Rejoin prices that OCR split into pieces.
+
+    Tesseract regularly breaks an amount at its separator -- "$8,99"
+    arrives as "$8" and ",99", "$3,49" as "$3," and "49". The pieces sit
+    adjacent or even overlapping, and neither half parses as money on its
+    own, so the row loses its price and drops out as noise.
+
+    Worse, the split fragments carry low OCR confidence precisely because
+    they are fragments. On a real Wendy's receipt the two halves of $3.49
+    came back at 0.12 while every surrounding word scored above 0.95, so a
+    confidence filter discards exactly the tokens that need repair. This
+    runs before any confidence filtering, and the merged token inherits
+    the highest confidence of its parts.
+
+    Only merges when the join produces something that parses as a price
+    and at least one half does not. Two legitimate adjacent numbers are
+    left alone.
+    """
+    from receipt_parser.prices import parse_price
+
+    merged_rows: list[Row] = []
+
+    for row in rows:
+        tokens = list(row.tokens)
+        i = 0
+        out: list[Token] = []
+
+        while i < len(tokens):
+            current = tokens[i]
+
+            if i + 1 < len(tokens):
+                nxt = tokens[i + 1]
+                joined = current.text + nxt.text
+
+                # Fragments sit tight against each other, and OCR
+                # sometimes reports overlapping boxes for them, so a
+                # negative gap is expected and allowed.
+                gap = nxt.bbox.x0 - current.bbox.x1
+                max_gap = max(current.bbox.height, nxt.bbox.height) * 0.6
+
+                if (
+                    gap < max_gap
+                    and parse_price(joined) is not None
+                    and parse_price(nxt.text) is None
+                ):
+                    out.append(
+                        Token(
+                            text=joined,
+                            bbox=BBox(
+                                x0=min(current.bbox.x0, nxt.bbox.x0),
+                                y0=min(current.bbox.y0, nxt.bbox.y0),
+                                x1=max(current.bbox.x1, nxt.bbox.x1),
+                                y1=max(current.bbox.y1, nxt.bbox.y1),
+                            ),
+                            confidence=max(current.confidence, nxt.confidence),
+                        )
+                    )
+                    i += 2
+                    continue
+
+            out.append(current)
+            i += 1
+
+        merged_rows.append(Row(tokens=out))
+
+    return merged_rows

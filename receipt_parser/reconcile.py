@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
-from receipt_parser.items import _column_price  # noqa: F401  (shared helper)
+from receipt_parser.items import _column_price, keyword_in_text  # noqa: F401
 from receipt_parser.models import LineItem, ParsedReceipt, ParseStatus, Row
 from receipt_parser.prices import parse_price
 
@@ -78,7 +78,7 @@ def extract_totals(
         row = rows[index]
         text = row.text.upper()
 
-        if any(word in text for word in _PAYMENT_KEYWORDS):
+        if any(keyword_in_text(text, word) for word in _PAYMENT_KEYWORDS):
             continue
 
         field = _field_for(text)
@@ -106,7 +106,7 @@ def extract_totals(
 
 def _field_for(text: str) -> str | None:
     for field, keyword in _FIELD_KEYWORDS:
-        if keyword in text:
+        if keyword_in_text(text, keyword):
             return field
     return None
 

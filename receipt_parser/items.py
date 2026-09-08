@@ -12,6 +12,7 @@ summary keyword, and everything from there down is summary.
 
 from __future__ import annotations
 
+import difflib
 import re
 from decimal import Decimal
 from enum import Enum
@@ -22,6 +23,43 @@ from receipt_parser.prices import parse_price
 # How close a token's right edge must be to the price column, as a
 # fraction of page width, to count as sitting in that column.
 COLUMN_TOLERANCE_RATIO = 0.04
+
+
+# Below this length a keyword is too short to fuzzy-match safely: "TAX"
+# is one edit from "TAG", "FAX" and "MAX", and a false summary row
+# truncates the item list at whatever row it hits.
+MIN_FUZZY_KEYWORD_LEN = 5
+
+# One substitution in an eight-letter word scores about 0.93, a dropped
+# character about 0.94. Two edits fall below this.
+FUZZY_CUTOFF = 0.88
+
+
+def keyword_in_text(text: str, keyword: str) -> bool:
+    """Whether a keyword appears in a row, allowing for OCR damage.
+
+    Exact substring first, which handles multi-word keywords and costs
+    nothing. Only single long keywords fall through to fuzzy comparison.
+
+    This exists because OCR splits words as readily as it misreads them.
+    On a real Wendy's receipt "Subtotal" came back as "Subtota" and a
+    separate "|", so an exact match failed and the subtotal row was
+    classified as a line item -- which then broke reconciliation, since
+    the subtotal was being counted as something somebody ate.
+    """
+    upper = text.upper()
+    if keyword in upper:
+        return True
+
+    if len(keyword) < MIN_FUZZY_KEYWORD_LEN or " " in keyword:
+        return False
+
+    # Compare against alphabetic runs only. Punctuation that OCR invents
+    # ("|", ".", ":") should not count against the similarity score.
+    words = re.findall(r"[A-Z]+", upper)
+    return bool(
+        difflib.get_close_matches(keyword, words, n=1, cutoff=FUZZY_CUTOFF)
+    )
 
 
 class RowKind(str, Enum):
@@ -81,9 +119,8 @@ def classify_row(row: Row, price_column: float | None, tolerance: float) -> RowK
     totals row looks structurally identical to an item row -- description
     on the left, amount in the price column. Only the words distinguish them.
     """
-    text = row.text.upper()
     for keyword in _SUMMARY_KEYWORDS:
-        if keyword in text:
+        if keyword_in_text(row.text, keyword):
             return RowKind.SUMMARY
 
     if price_column is None:
@@ -197,20 +234,41 @@ def _column_price(row: Row, price_column: float, tolerance: float):
 
 
 def _description_text(row: Row, price_column: float, tolerance: float) -> str:
-    """Everything left of the price column, joined.
+    """Everything left of the price column, cleaned.
 
-    Standalone currency symbols are dropped. Receipts that column-align the
-    symbol separately from the amount emit it as its own token sitting left
-    of the price, which would otherwise land in every description.
+    Three kinds of token are dropped:
+
+    Standalone currency symbols, on receipts that column-align the symbol
+    separately from the amount.
+
+    Product codes. Grocery receipts print the UPC between the item name
+    and the price ("BREAD  007225003712  F  2.88"), and a 12-digit number
+    is never part of a product name.
+
+    Single-letter tax flags, but only on rows that also carried a product
+    code. Those flags sit in the same column block as the UPC, and tying
+    the rule to the UPC keeps it from eating the "D" in "VITAMIN D" on
+    receipts that print no codes at all.
     """
-    parts = [
+    candidates = [
         token.text
         for token in row.tokens
         if token.bbox.x1 < price_column - tolerance
         and not _CURRENCY_ONLY.match(token.text.strip())
     ]
-    return " ".join(parts).strip()
 
+    kept: list[str] = []
+    saw_product_code = False
+    for text in candidates:
+        stripped = text.strip()
+        if _PRODUCT_CODE.match(stripped):
+            saw_product_code = True
+            continue
+        if saw_product_code and _TAX_FLAG.match(stripped):
+            continue
+        kept.append(text)
+
+    return " ".join(kept).strip()
 
 def _split_quantity(description: str) -> tuple[int, Decimal | None, str]:
     """Pull a leading quantity and optional unit price out of a description.
