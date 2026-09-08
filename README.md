@@ -1,3 +1,4 @@
+![tests](https://github.com/Hiu1111/receipt-parser/actions/workflows/tests.yml/badge.svg)
 # receipt-parser
 
 Photograph a receipt, say who had what, get what each person owes.

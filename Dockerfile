@@ -21,7 +21,9 @@ USER app
 
 EXPOSE 8000
 
+# Hosts assign a port at runtime via $PORT. Shell form so the variable
+# expands; the default keeps `docker run -p 8000:8000` working locally.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+    CMD python -c "import os,urllib.request; urllib.request.urlopen(f\"http://localhost:{os.environ.get('PORT','8000')}/health\")"
 
-CMD ["uvicorn", "receipt_parser.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD sh -c "uvicorn receipt_parser.api:app --host 0.0.0.0 --port ${PORT:-8000}"
