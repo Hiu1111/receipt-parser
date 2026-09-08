@@ -45,8 +45,19 @@ _SUMMARY_KEYWORDS = [
 # amount in the price column.
 _QTY_AT_UNIT = re.compile(r"^(\d+)\s*[@xX]\s*([\d.,]+)\s*(.*)$")
 
+# "2x Lorem ipsum" -- quantity glued to an x, then the description. Common
+# on printed retail receipts. Distinct from _QTY_AT_UNIT because what
+# follows the separator is a description, not a unit price, and there is
+# no space to anchor on.
+_QTY_X_DESC = re.compile(r"^(\d+)\s*[@xX]\s*(\D.*)$")
+
 # "2 BURGER" -- leading quantity, no unit price given.
 _LEADING_QTY = re.compile(r"^(\d+)\s+(\D.*)$")
+
+# A lone currency symbol is its own OCR token on receipts that column-align
+# the symbol separately from the amount. It sits left of the price column
+# and would otherwise be swept into the description.
+_CURRENCY_ONLY = re.compile(r"^[$\u20ac\u00a3\u00a5]+$")
 
 
 def classify_row(row: Row, price_column: float | None, tolerance: float) -> RowKind:
@@ -172,11 +183,17 @@ def _column_price(row: Row, price_column: float, tolerance: float):
 
 
 def _description_text(row: Row, price_column: float, tolerance: float) -> str:
-    """Everything left of the price column, joined."""
+    """Everything left of the price column, joined.
+
+    Standalone currency symbols are dropped. Receipts that column-align the
+    symbol separately from the amount emit it as its own token sitting left
+    of the price, which would otherwise land in every description.
+    """
     parts = [
         token.text
         for token in row.tokens
         if token.bbox.x1 < price_column - tolerance
+        and not _CURRENCY_ONLY.match(token.text.strip())
     ]
     return " ".join(parts).strip()
 
@@ -191,6 +208,16 @@ def _split_quantity(description: str) -> tuple[int, Decimal | None, str]:
         qty_text, unit_text, rest = match.groups()
         unit = parse_price(unit_text)
         return int(qty_text), (unit.value if unit else None), rest.strip()
+
+    # Tried after _QTY_AT_UNIT, because "2 @ 4.99 TACO" matches both and
+    # only the first recovers the unit price.
+    match = _QTY_X_DESC.match(description)
+    if match:
+        qty_text, rest = match.groups()
+        quantity = int(qty_text)
+        if quantity > 999:
+            return 1, None, description
+        return quantity, None, rest.strip()
 
     match = _LEADING_QTY.match(description)
     if match:

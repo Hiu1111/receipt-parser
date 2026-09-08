@@ -185,3 +185,37 @@ def test_price_with_no_description_is_skipped():
     rows = cluster_rows(tokens)
     items, _ = extract_items(rows, find_price_column(rows))
     assert [i.description for i in items] == ["SODA", "WATER"]
+
+
+def test_quantity_glued_to_x():
+    """"2x Lorem ipsum" from a real retail receipt.
+
+    The leading-quantity pattern requires whitespace after the digits and
+    the @-pattern requires a number after the separator, so neither
+    matched and the quantity silently read as 1.
+    """
+    from receipt_parser.items import _split_quantity
+
+    assert _split_quantity("2x Lorem ipsum") == (2, None, "Lorem ipsum")
+    assert _split_quantity("1x Lorem ipsum") == (1, None, "Lorem ipsum")
+    assert _split_quantity("2X Widget") == (2, None, "Widget")
+
+
+def test_at_notation_still_wins_over_x_notation():
+    """"2 @ 4.99 TACO" matches both patterns; only one keeps the unit price."""
+    from receipt_parser.items import _split_quantity
+
+    assert _split_quantity("2 @ 4.99 TACO") == (2, Decimal("4.99"), "TACO")
+
+
+def test_standalone_currency_token_is_not_part_of_the_description():
+    """Receipts that column-align the "$" emit it as its own token."""
+    tokens = [
+        tok("WIDGET", 10, 100),
+        tok("$", 250, 100, w=10),
+        tok("35.00", 300, 100, w=50),
+        *priced("SODA", "3.25", 130),
+    ]
+    rows = cluster_rows(tokens)
+    items, _ = extract_items(rows, find_price_column(rows))
+    assert items[0].description == "WIDGET"
