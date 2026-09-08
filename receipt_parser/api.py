@@ -17,9 +17,11 @@ column.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from receipt_parser.models import ParsedReceipt
@@ -43,6 +45,20 @@ app = FastAPI(
     description="Parse receipt images into structured line items and split them.",
     version="0.1.0",
 )
+
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    """Serve the split-a-receipt page.
+
+    Shipped from the same container as the API rather than a separate
+    static host: it is one HTML file with no build step, and keeping it
+    here means there is one thing to deploy and no CORS to configure.
+    """
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 def get_provider() -> OCRProvider:

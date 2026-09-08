@@ -170,3 +170,19 @@ def test_split_rejects_malformed_receipt(client):
         "assignments": [],
     })
     assert response.status_code == 422
+
+
+def test_index_page_is_served():
+    """The UI ships from the same container as the API."""
+    with TestClient(app) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+
+
+def test_index_is_not_in_the_api_schema():
+    """The page is not an endpoint anyone integrates against."""
+    with TestClient(app) as client:
+        schema = client.get("/openapi.json").json()
+    assert "/" not in schema["paths"]
+    assert "/parse" in schema["paths"]

@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Split a receipt</title>
+<style>
+  :root {
+    --paper: #f6f6f4;
+    --slip: #fffffe;
+    --ink: #000;
+    --muted: #6e6e6e;
+    --rule: #d6d6d1;
+    --stamp: #a8322d;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 16px/1.5 var(--sans);
+    padding: 24px 16px 64px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .slip {
+    width: 100%;
+    max-width: 420px;
+    background: var(--slip);
+    padding: 28px 22px 32px;
+    /* Torn-edge shadow rather than a card: this is paper, not a panel. */
+    box-shadow: 0 1px 0 var(--rule), 0 12px 28px -18px rgba(0,0,0,.4);
+  }
+
+  h1 {
+    font: 600 15px/1 var(--sans);
+    letter-spacing: .02em;
+    margin: 0 0 22px;
+  }
+  h1 span { color: var(--muted); font-weight: 400; }
+
+  .rule {
+    border: 0;
+    border-top: 1px dashed var(--rule);
+    margin: 18px 0;
+  }
+
+  .drop {
+    border: 1px dashed var(--rule);
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--ink); background: var(--paper); }
+  .drop:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .drop p { margin: 0; }
+  .drop .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  input[type=file] { display: none; }
+
+  .working { text-align: center; color: var(--muted); padding: 40px 0; }
+
+  .merchant { font: 600 17px/1.3 var(--sans); margin: 0 0 2px; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0; }
+
+  .line {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    padding: 7px 0 3px;
+  }
+  .line .amt { white-space: nowrap; }
+  .line .qty { color: var(--muted); }
+
+  .item + .item { border-top: 1px solid #efefec; }
+  .item.unassigned .desc::after {
+    content: "  not assigned";
+    color: var(--stamp);
+    font-size: 12px;
+  }
+
+  .who { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+  .chip {
+    font: 500 13px/1 var(--sans);
+    border: 1px solid var(--rule);
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 7px 12px;
+    cursor: pointer;
+    /* Comfortable thumb target: this gets used standing at a table. */
+    min-height: 34px;
+  }
+  .chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .chip.on { color: #fff; border-color: transparent; }
+
+  .assign { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 10px; }
+
+  .name-input {
+    font: 500 13px/1 var(--sans);
+    border: 1px solid var(--ink);
+    border-radius: 999px;
+    padding: 7px 12px;
+    min-height: 34px;
+    width: 110px;
+  }
+
+  .owes .line { font-size: 15px; font-weight: 600; padding: 9px 0; }
+  .owes .line + .line { border-top: 1px solid #efefec; }
+  .owes .swatch {
+    display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 8px;
+  }
+  .owes .breakdown {
+    font-size: 12px; font-weight: 400; color: var(--muted);
+  }
+
+  .balanced { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  .notice {
+    border-left: 3px solid var(--stamp);
+    padding: 10px 0 10px 12px;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  .notice p { margin: 0 0 6px; }
+  .notice p:last-child { margin-bottom: 0; }
+  .notice .head { font-weight: 600; }
+
+  .restart {
+    background: none; border: 0; padding: 8px 0;
+    font: 400 13px/1 var(--sans);
+    color: var(--muted);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main class="slip">
+  <h1>Split a receipt <span>&mdash; photograph it, say who had what</span></h1>
+  <div id="view"></div>
+</main>
+
+<script>
+// Muted stamp-ink hues, distinguishable from each other and from the red
+// used for warnings, so a person's colour is never mistaken for an alert.
+const PALETTE = ["#1f4e79", "#4a6741", "#6b3a5b", "#8a6a1f", "#1f6f6b", "#5a4a7a"];
+
+let receipt = null;
+let people = [];
+let assigned = {};
+let split = null;
+let pending = null;
+
+const view = document.getElementById("view");
+const money = (v) => Number(v).toFixed(2);
+const colourOf = (name) => PALETTE[people.indexOf(name) % PALETTE.length];
+
+function showUpload(message) {
+  view.innerHTML = `
+    <div class="drop" id="drop" tabindex="0" role="button"
+         aria-label="Choose a receipt photo">
+      <p>Drop a photo here, or tap to choose</p>
+      <p class="hint">${message || "JPEG, PNG or WebP"}</p>
+    </div>
+    <input type="file" id="file" accept="image/*">`;
+
+  const drop = document.getElementById("drop");
+  const file = document.getElementById("file");
+
+  drop.onclick = () => file.click();
+  drop.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); file.click(); }
+  };
+  file.onchange = () => file.files[0] && upload(file.files[0]);
+
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  };
+}
+
+async function upload(file) {
+  view.innerHTML = `<p class="working">Reading the receipt&hellip;</p>`;
+
+  const body = new FormData();
+  body.append("file", file);
+
+  try {
+    const res = await fetch("/parse", { method: "POST", body });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showUpload(err.detail || `Upload failed (${res.status}).`);
+      return;
+    }
+    receipt = await res.json();
+  } catch {
+    showUpload("Could not reach the server. Check your connection.");
+    return;
+  }
+
+  if (!receipt.line_items.length) {
+    showUpload(receipt.warnings[0] || "No items found. Try another photo.");
+    return;
+  }
+
+  people = [];
+  assigned = {};
+  split = null;
+  render();
+}
+
+function render() {
+  const parts = [];
+
+  if (receipt.merchant) parts.push(`<p class="merchant">${esc(receipt.merchant)}</p>`);
+  parts.push(`<p class="meta">${receipt.line_items.length} items &middot; ${money(receipt.total)} total</p>`);
+
+  parts.push(warningsHtml());
+  parts.push(`<hr class="rule">`);
+  parts.push(peopleHtml());
+  parts.push(`<hr class="rule">`);
+  parts.push(receipt.line_items.map(itemHtml).join(""));
+  parts.push(`<hr class="rule">`);
+  parts.push(totalsHtml());
+  parts.push(owesHtml());
+  parts.push(`<button class="restart" id="restart">Start over with another receipt</button>`);
+
+  view.innerHTML = parts.join("");
+  wire();
+}
+
+function warningsHtml() {
+  if (!receipt.warnings.length) return "";
+
+  const head = receipt.status === "ok"
+    ? "Worth checking"
+    : "This receipt didn't add up";
+
+  return `<div class="notice">
+    <p class="head">${head}</p>
+    ${receipt.warnings.map((w) => `<p>${esc(w)}</p>`).join("")}
+  </div>`;
+}
+
+function peopleHtml() {
+  const chips = people.map((name) => `
+    <button class="chip on" style="background:${colourOf(name)}"
+            data-remove="${esc(name)}" title="Remove ${esc(name)}">
+      ${esc(name)}
+    </button>`).join("");
+
+  const adder = `<input class="name-input" id="new-name" placeholder="Add a name"
+                        aria-label="Add a person" maxlength="16">`;
+
+  return `<div class="who">${chips}${adder}</div>`;
+}
+
+function itemHtml(item, i) {
+  const names = assigned[i] || [];
+  const unassigned = people.length && !names.length ? " unassigned" : "";
+  const qty = item.quantity > 1 ? `<span class="qty">${item.quantity}&times; </span>` : "";
+
+  const toggles = people.map((name) => {
+    const on = names.includes(name);
+    const style = on ? `style="background:${colourOf(name)}"` : "";
+    return `<button class="chip ${on ? "on" : ""}" ${style}
+                    data-item="${i}" data-name="${esc(name)}"
+                    aria-pressed="${on}">${esc(name)}</button>`;
+  }).join("");
+
+  return `<div class="item${unassigned}">
+    <div class="line">
+      <span class="desc">${qty}${esc(item.description)}</span>
+      <span class="amt">${money(item.total)}</span>
+    </div>
+    ${people.length ? `<div class="assign">${toggles}</div>` : ""}
+  </div>`;
+}
+
+function totalsHtml() {
+  const rows = [];
+  if (receipt.subtotal) rows.push(row("Subtotal", receipt.subtotal));
+  if (receipt.tax) rows.push(row("Tax", receipt.tax));
+  if (receipt.tip) rows.push(row("Tip", receipt.tip));
+  rows.push(row("Total", receipt.total));
+  return rows.join("");
+}
+
+function row(label, amount) {
+  return `<div class="line"><span>${label}</span><span class="amt">${money(amount)}</span></div>`;
+}
+
+function owesHtml() {
+  if (!people.length) {
+    return `<p class="meta">Add the people at the table, then tap a name under
+            each item to say who had it.</p>`;
+  }
+  if (!split) return `<p class="meta">Working out the split&hellip;</p>`;
+
+  const rows = split.shares.map((s) => `
+    <div class="line">
+      <span><span class="swatch" style="background:${colourOf(s.name)}"></span>${esc(s.name)}
+        <span class="breakdown">${money(s.items_subtotal)} + ${money(Number(s.tax) + Number(s.tip))} tax &amp; tip</span>
+      </span>
+      <span class="amt">${money(s.total)}</span>
+    </div>`).join("");
+
+  // Showing the reconciliation is the point: the shares are computed with
+  // largest-remainder rounding precisely so this always balances, and
+  // saying so is what makes the number trustworthy at the table.
+  const paid = split.shares.reduce((sum, s) => sum + Number(s.total), 0);
+  const balanced = Math.abs(paid - Number(receipt.total)) < 0.005
+    ? `Adds up to the ${money(receipt.total)} on the receipt.`
+    : `These shares come to ${money(paid)}, not the ${money(receipt.total)} on the receipt.`;
+
+  return `<hr class="rule">
+    <div class="owes">${rows}</div>
+    <p class="balanced">${balanced}</p>`;
+}
+
+function wire() {
+  const input = document.getElementById("new-name");
+  if (input) {
+    input.onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      const name = input.value.trim();
+      if (name && !people.includes(name)) {
+        people.push(name);
+        render();
+        document.getElementById("new-name").focus();
+      }
+    };
+  }
+
+  view.querySelectorAll("[data-remove]").forEach((btn) => {
+    btn.onclick = () => {
+      const name = btn.dataset.remove;
+      people = people.filter((p) => p !== name);
+      for (const i of Object.keys(assigned)) {
+        assigned[i] = assigned[i].filter((p) => p !== name);
+        if (!assigned[i].length) delete assigned[i];
+      }
+      recalculate();
+    };
+  });
+
+  view.querySelectorAll("[data-item]").forEach((btn) => {
+    btn.onclick = () => {
+      const i = btn.dataset.item;
+      const name = btn.dataset.name;
+      const names = assigned[i] || [];
+      assigned[i] = names.includes(name)
+        ? names.filter((p) => p !== name)
+        : [...names, name];
+      if (!assigned[i].length) delete assigned[i];
+      recalculate();
+    };
+  });
+
+  const restart = document.getElementById("restart");
+  if (restart) restart.onclick = () => showUpload();
+}
+
+function recalculate() {
+  render();
+
+  const assignments = Object.entries(assigned)
+    .map(([index, names]) => ({ item_index: Number(index), people: names }));
+
+  if (!assignments.length) {
+    split = { shares: people.map((name) => ({
+      name, items_subtotal: "0", tax: "0", tip: "0", total: "0",
+    })) };
+    render();
+    return;
+  }
+
+  // The server owns the arithmetic, including the rounding rules. Doing it
+  // again in the browser would be a second implementation to keep in sync,
+  // and the two would drift on exactly the penny cases that matter.
+  clearTimeout(pending);
+  pending = setTimeout(async () => {
+    try {
+      const res = await fetch("/split", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receipt, assignments }),
+      });
+      if (res.ok) {
+        split = await res.json();
+        render();
+      }
+    } catch { /* leave the previous split showing */ }
+  }, 120);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+showUpload();
+</script>
+</body>
+</html>
