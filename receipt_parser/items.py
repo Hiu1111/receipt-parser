@@ -59,6 +59,20 @@ _LEADING_QTY = re.compile(r"^(\d+)\s+(\D.*)$")
 # and would otherwise be swept into the description.
 _CURRENCY_ONLY = re.compile(r"^[$\u20ac\u00a3\u00a5]+$")
 
+# A UPC or SKU printed between the item name and the price. Eight digits
+# is well past any quantity, weight, or size that belongs in a name.
+_PRODUCT_CODE = re.compile(r"^\d{8,}$")
+
+# Tax-status flags printed alongside the product code on grocery receipts.
+_TAX_FLAG = re.compile(r"^[A-Z]$")
+
+# Package-size units. "12 CT NITRIL" is one box of twelve, not twelve
+# boxes -- the leading number sizes the package rather than counting it.
+_PACKAGE_UNITS = {
+    "CT", "PK", "PC", "PCS", "OZ", "LB", "LBS", "G", "KG",
+    "ML", "L", "GAL", "QT", "PT", "IN", "FT", "MG",
+}
+
 
 def classify_row(row: Row, price_column: float | None, tolerance: float) -> RowKind:
     """Decide what a row is.
@@ -223,6 +237,10 @@ def _split_quantity(description: str) -> tuple[int, Decimal | None, str]:
     if match:
         qty_text, rest = match.groups()
         quantity = int(qty_text)
+        # "12 CT NITRIL" is one twelve-count box, not twelve boxes.
+        first_word = rest.split()[0].upper().rstrip(".") if rest.split() else ""
+        if first_word in _PACKAGE_UNITS:
+            return 1, None, description
         # A four-digit leading number is a year or a SKU, not a quantity.
         # Nobody orders 2024 burgers.
         if quantity > 999:

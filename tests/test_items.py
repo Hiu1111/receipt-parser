@@ -219,3 +219,42 @@ def test_standalone_currency_token_is_not_part_of_the_description():
     rows = cluster_rows(tokens)
     items, _ = extract_items(rows, find_price_column(rows))
     assert items[0].description == "WIDGET"
+
+
+def test_upc_is_stripped_from_description():
+    """Grocery receipts print the UPC between the name and the price.
+
+    From a real Walmart receipt: "BREAD  007225003712  F  2.88".
+    """
+    tokens = [
+        tok("BREAD", 10, 100),
+        tok("007225003712", 120, 100, w=120),
+        tok("F", 260, 100, w=10),
+        tok("2.88", 300, 100, w=50),
+        *priced("EGGS", "1.88", 130),
+    ]
+    rows = cluster_rows(tokens)
+    items, _ = extract_items(rows, find_price_column(rows))
+    assert items[0].description == "BREAD"
+
+
+def test_single_letter_survives_when_there_is_no_product_code():
+    """The tax-flag rule must not eat the "D" in "VITAMIN D"."""
+    tokens = [
+        tok("VITAMIN", 10, 100),
+        tok("D", 100, 100, w=15),
+        tok("8.99", 300, 100, w=50),
+        *priced("EGGS", "1.88", 130),
+    ]
+    rows = cluster_rows(tokens)
+    items, _ = extract_items(rows, find_price_column(rows))
+    assert items[0].description == "VITAMIN D"
+
+
+def test_package_count_is_not_a_quantity():
+    """"12 CT NITRIL" is one twelve-count box, not twelve boxes."""
+    from receipt_parser.items import _split_quantity
+
+    assert _split_quantity("12 CT NITRIL") == (1, None, "12 CT NITRIL")
+    assert _split_quantity("16 OZ SODA") == (1, None, "16 OZ SODA")
+    assert _split_quantity("3 COOKIE") == (3, None, "COOKIE")
