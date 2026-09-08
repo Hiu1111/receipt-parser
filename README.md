@@ -1,3 +1,7 @@
+**Live demo:** https://receipt-parser-exy4.onrender.com — free tier, so the
+first request after a period of inactivity takes about a minute while the
+instance wakes up.
+
 ![tests](https://github.com/Hiu1111/receipt-parser/actions/workflows/tests.yml/badge.svg)
 # receipt-parser
 
